@@ -203,11 +203,20 @@ static int do_add_entry(struct unpack_trees_options *o, struct cache_entry *ce,
 			       ADD_CACHE_OK_TO_ADD | ADD_CACHE_OK_TO_REPLACE);
 }
 
+static struct cache_entry *dup_entry(const struct cache_entry *ce)
+{
+	unsigned int size = ce_size(ce);
+	struct cache_entry *new_entry = xmalloc(size);
+
+	memcpy(new_entry, ce, size);
+	return new_entry;
+}
+
 static void add_entry(struct unpack_trees_options *o,
 		      const struct cache_entry *ce,
 		      unsigned int set, unsigned int clear)
 {
-	do_add_entry(o, dup_cache_entry(ce, &o->result), set, clear);
+	do_add_entry(o, dup_entry(ce), set, clear);
 }
 
 /*
@@ -788,17 +797,10 @@ static int ce_in_traverse_path(const struct cache_entry *ce,
 	return (info->pathlen < ce_namelen(ce));
 }
 
-static struct cache_entry *create_ce_entry(const struct traverse_info *info,
-	const struct name_entry *n,
-	int stage,
-	struct index_state *istate,
-	int is_transient)
+static struct cache_entry *create_ce_entry(const struct traverse_info *info, const struct name_entry *n, int stage)
 {
 	int len = traverse_path_len(info, n);
-	struct cache_entry *ce =
-		is_transient ?
-		make_empty_transient_cache_entry(len) :
-		make_empty_index_cache_entry(istate, len);
+	struct cache_entry *ce = xcalloc(1, cache_entry_size(len));
 
 	ce->ce_mode = create_ce_mode(n->mode);
 	ce->ce_flags = create_ce_flags(stage);
@@ -844,13 +846,7 @@ static int unpack_nondirectories(int n, unsigned long mask,
 			stage = 3;
 		else
 			stage = 2;
-
-		/*
-		 * If this is a merge operation, then the cache
-		 * entries are only temporary and discarded several
-		 * lines below.
-		 */
-		src[i + o->merge] = create_ce_entry(info, names + i, stage, &o->result, o->merge);
+		src[i + o->merge] = create_ce_entry(info, names + i, stage);
 	}
 
 	if (o->merge) {
@@ -859,7 +855,7 @@ static int unpack_nondirectories(int n, unsigned long mask,
 		for (i = 0; i < n; i++) {
 			struct cache_entry *ce = src[i + o->merge];
 			if (ce != o->df_conflict_entry)
-				discard_cache_entry(ce);
+				free(ce);
 		}
 		return rc;
 	}
@@ -1791,7 +1787,7 @@ static int merged_entry(const struct cache_entry *ce,
 			struct unpack_trees_options *o)
 {
 	int update = CE_UPDATE;
-	struct cache_entry *merge = dup_cache_entry(ce, &o->result);
+	struct cache_entry *merge = dup_entry(ce);
 
 	if (!old) {
 		/*
@@ -1811,7 +1807,7 @@ static int merged_entry(const struct cache_entry *ce,
 
 		if (verify_absent(merge,
 				  ERROR_WOULD_LOSE_UNTRACKED_OVERWRITTEN, o)) {
-			discard_cache_entry(merge);
+			free(merge);
 			return -1;
 		}
 		invalidate_ce_path(merge, o);
@@ -1837,7 +1833,7 @@ static int merged_entry(const struct cache_entry *ce,
 			update = 0;
 		} else {
 			if (verify_uptodate(old, o)) {
-				discard_cache_entry(merge);
+				free(merge);
 				return -1;
 			}
 			/* Migrate old flags over */
